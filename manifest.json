@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "ScratchPing",
+  "version": "0.4",
+  "description": "Voir l'activité en direct sur les projets Scratch.",
+  "permissions": [
+    "cookies",
+    "notifications",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://scratch.mit.edu/*",
+    "https://clouddata.scratch.mit.edu/*",
+    "https://api.scratch.mit.edu/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
