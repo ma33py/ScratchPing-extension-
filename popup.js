@@ -1,38 +1,68 @@
+/**
+ * Nom de votre extension
+ * Version : 1.0
+ * Licence : CC-BY-NC 4.0 (https://creativecommons.org/licenses/by-nc/4.0/)
+ * Auteur : Votre nom
+ */
+
 const CINQ_MIN = 5 * 60 * 1000;
+
+// =====================
+// ICÔNE DE L'EXTENSION
+// =====================
+
+function setIcon(etat) {
+    chrome.action.setIcon({
+        path: {
+            16:  `icons/icon16_${etat}.png`,
+            48:  `icons/icon48_${etat}.png`,
+            128: `icons/icon128_${etat}.png`
+        }
+    });
+}
+
+// =====================
+// NETTOYAGE DU NOM
+// =====================
+
+function nettoyerNom(nom) {
+    return nom
+        .replace(/\(.*?\)/g, '')
+        .replace(/\[.*?\]/g, '')
+        .replace(/#\S+/g, '')
+        .replace(/\s*v?\d+(\.\d+)+\s*/gi, '')
+        .replace(/\s+(alpha|beta|bêta)\s*$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+// =====================
+// PROJETS (chrome.storage)
+// =====================
+
+async function loadProjects() {
+    return new Promise(resolve => {
+        chrome.storage.local.get('projects', data => resolve(data.projects ?? []));
+    });
+}
+
+async function saveProjects(projects) {
+    return new Promise(resolve => chrome.storage.local.set({ projects }, resolve));
+}
 
 // =====================
 // KEEPALIVE + MESSAGE
 // =====================
 
-// Connexion persistante pour garder le service worker éveillé
 const port = chrome.runtime.connect({ name: 'keepAlive' });
 
 async function sendMsg(msg) {
     try {
         return await chrome.runtime.sendMessage(msg);
     } catch {
-        // Service worker endormi — on attend un peu et on réessaie
         await new Promise(r => setTimeout(r, 200));
         return await chrome.runtime.sendMessage(msg);
     }
-}
-
-// =====================
-// PROJETS (stockés dans chrome.storage)
-// =====================
-
-async function loadProjects() {
-    return new Promise(resolve => {
-        chrome.storage.local.get('projects', data => {
-            resolve(data.projects ?? []);
-        });
-    });
-}
-
-async function saveProjects(projects) {
-    return new Promise(resolve => {
-        chrome.storage.local.set({ projects }, resolve);
-    });
 }
 
 // =====================
@@ -46,40 +76,51 @@ async function init() {
     sessionId = await sendMsg({ type: 'GET_SESSION' });
 
     if (!sessionId) {
-        document.getElementById('login_box').style.display          = 'block';
-        document.getElementById('sort').style.display               = 'none';
-        document.getElementById('add_box').style.display            = 'none';
+        setIcon('disconnected');
+        document.getElementById('login_box').style.display    = 'block';
+        document.getElementById('add_box').style.display      = 'none';
+        document.getElementById('sort_bar').style.display     = 'none';
         document.getElementById('projects_container').style.display = 'none';
+        document.getElementById('footer').style.display       = 'none';
         return;
     }
 
     pseudo = localStorage.getItem('pseudo');
     if (!pseudo) {
-        pseudo = prompt("Ton pseudo Scratch ?");
+        pseudo = prompt("Your Scratch username?");
         localStorage.setItem('pseudo', pseudo);
     }
 
+    setIcon('normal');
     document.getElementById('login_box').style.display = 'none';
+
+    const projects = await loadProjects();
+    await sendMsg({ type: 'ENSURE_TW_CONNECTIONS', projectIds: projects.map(p => p.id) });
+
     updateSortButtons();
     await afficherProjets();
     setInterval(autoUpdate, 5000);
 }
 
 document.getElementById('retry_btn').addEventListener('click', init);
+document.getElementById('refresh_btn').addEventListener('click', afficherProjets);
+
+// =====================
+// INPUT CLEAR BUTTON
+// =====================
+
+document.getElementById('add_input').addEventListener('input', function() {
+    document.getElementById('clear_btn').style.display = this.value ? 'block' : 'none';
+});
+document.getElementById('clear_btn').addEventListener('click', () => {
+    document.getElementById('add_input').value = '';
+    document.getElementById('clear_btn').style.display = 'none';
+    document.getElementById('add_error').textContent = '';
+});
 
 // =====================
 // AJOUT DE PROJET
 // =====================
-function nettoyerNom(nom) {
-    return nom
-        .replace(/\s+(alpha|beta|bêta)\s*$/i, '')
-        .replace(/\(.*?\)/g, '')
-        .replace(/\[.*?\]/g, '')
-        .replace(/#\S+/g, '')
-        .replace(/\s*v?\d+(\.\d+)+\s*/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
 
 document.getElementById('add_btn').addEventListener('click', async () => {
     const input = document.getElementById('add_input').value.trim();
@@ -87,34 +128,26 @@ document.getElementById('add_btn').addEventListener('click', async () => {
     error.textContent = '';
 
     const match = input.match(/(\d+)/);
-    if (!match) {
-        error.textContent = '❌ ID invalide';
-        return;
-    }
+    if (!match) { error.textContent = '❌ No ID found'; return; }
 
     const id       = parseInt(match[1]);
     const projects = await loadProjects();
 
     if (projects.find(p => p.id === id)) {
-        error.textContent = '⚠️ Déjà dans la liste';
+        error.textContent = '⚠️ Already in the list';
         return;
     }
 
-    error.textContent = '⏳ Chargement...';
-    const info = await sendMsg({
-        type: 'GET_PROJECT_INFO',
-        projectId: id,
-        sessionId
-    });
-
-    if (!info) {
-        error.textContent = '❌ Projet introuvable';
-        return;
-    }
+    error.textContent = '⏳ Loading...';
+    const info = await sendMsg({ type: 'GET_PROJECT_INFO', projectId: id, sessionId });
+    if (!info) { error.textContent = "❌ Project not found or not shared"; return; }
 
     projects.push({ id: info.id, name: nettoyerNom(info.name) });
     await saveProjects(projects);
+    await sendMsg({ type: 'ENSURE_TW_CONNECTIONS', projectIds: projects.map(p => p.id) });
+
     document.getElementById('add_input').value = '';
+    document.getElementById('clear_btn').style.display = 'none';
     error.textContent = '';
     afficherProjets();
 });
@@ -129,48 +162,35 @@ document.getElementById('add_input').addEventListener('keydown', e => {
 
 async function supprimerProjet(id) {
     const projects = await loadProjects();
-    await saveProjects(projects.filter(p => p.id !== id));
+    const newList  = projects.filter(p => p.id !== id);
+    await saveProjects(newList);
+    await sendMsg({ type: 'ENSURE_TW_CONNECTIONS', projectIds: newList.map(p => p.id) });
     afficherProjets();
 }
 
 // =====================
-// CLOUD LOGS
+// CLOUD LOGS SCRATCH
 // =====================
 
-const cache     = {};
-const vuesCache = {};
+const scratchCache = {};
+const vuesCache    = {};
 
-async function fetchCloudLogs(projectId) {
-    const logs = await sendMsg({
-        type: 'GET_CLOUD_LOGS',
-        projectId,
-        sessionId
-    });
-
-    const now        = Date.now();
+async function fetchScratchLogs(projectId) {
+    const logs = await sendMsg({ type: 'GET_SCRATCH_LOGS', projectId, sessionId });
+    const now  = Date.now();
     const recentLogs = (logs ?? []).filter(log => (now - log.timestamp) < CINQ_MIN * 2);
-
     const lastSeen = {};
     recentLogs.forEach(log => {
         if (!lastSeen[log.user] || log.timestamp > lastSeen[log.user]) {
             lastSeen[log.user] = log.timestamp;
         }
     });
-
-    const top5 = Object.entries(lastSeen)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5);
-
-    cache[projectId] = { top5, count: top5.length, updatedAt: now };
+    scratchCache[projectId] = Object.entries(lastSeen).sort((a, b) => b[1] - a[1]).slice(0, 5);
 }
 
 async function fetchViews(projectId) {
     if (vuesCache[projectId]) return vuesCache[projectId];
-    const info = await sendMsg({
-        type: 'GET_PROJECT_INFO',
-        projectId,
-        sessionId
-    });
+    const info = await sendMsg({ type: 'GET_PROJECT_INFO', projectId, sessionId });
     vuesCache[projectId] = info?.views ?? '?';
     return vuesCache[projectId];
 }
@@ -181,52 +201,44 @@ async function fetchViews(projectId) {
 
 function tempsRelatif(timestamp) {
     const diff = Math.floor((Date.now() - timestamp) / 1000);
-    if (diff < 60)    return `il y a ${diff}s`;
-    if (diff < 3600)  return `il y a ${Math.floor(diff / 60)}min`;
-    if (diff < 86400) return `il y a ${Math.floor(diff / 3600)}h`;
-    return `il y a ${Math.floor(diff / 86400)}j`;
+    if (diff < 60)    return `${diff}s ago`;
+    if (diff < 3600)  return `${Math.floor(diff / 60)}min ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
 }
 
 setInterval(() => {
     document.querySelectorAll('.last_seen[data-ts]').forEach(el => {
         const ts   = parseInt(el.dataset.ts);
         const user = el.dataset.user;
-        el.innerHTML = `<a href="https://scratch.mit.edu/users/${user}" target="_blank">${user}</a> : ${tempsRelatif(ts)}`;
+        el.innerHTML = `<a href="https://scratch.mit.edu/users/${user}" target="_blank">${user}</a> · ${tempsRelatif(ts)}`;
     });
 }, 1000);
 
 // =====================
-// NOTIFICATIONS
+// NOTIFICATIONS + ICÔNE
 // =====================
 
-let etaitPartage = false;
+let etaitEtat = 'normal';
 
-function notifierSiNecessaire(projects) {
-    const projetPartage = projects.find(p => {
-        const data         = cache[p.id];
-        if (!data) return false;
-        const monLog       = data.top5.find(([user]) => user === pseudo);
-        const jeJoue       = monLog ? (Date.now() - monLog[1]) < CINQ_MIN : false;
-        const autresActifs = data.top5.filter(([user, ts]) =>
-            user !== pseudo && (Date.now() - ts) < CINQ_MIN
-        ).length;
-        return jeJoue && autresActifs > 0;
+function notifierSiNecessaire(projects, twActive) {
+    let surScratch = false;
+    projects.forEach(p => {
+        const scratch       = scratchCache[p.id] ?? [];
+        const meScratch     = scratch.find(([u]) => u === pseudo);
+        const jeJoueScratch = meScratch ? (Date.now() - meScratch[1]) < CINQ_MIN : false;
+        const autresScratch = scratch.filter(([u, ts]) => u !== pseudo && (Date.now() - ts) < CINQ_MIN).length;
+        if (jeJoueScratch && autresScratch > 0) surScratch = true;
+        if (jeJoueScratch && autresScratch > 0) {
+            const noms = scratch.filter(([u, ts]) => u !== pseudo && (Date.now() - ts) < CINQ_MIN).map(([u]) => u).join(', ');
+            if ('scratch' !== etaitEtat) {
+                etaitEtat = 'scratch';
+                sendMsg({ type: 'NOTIFY', body: `${noms} is also playing ${p.name}!` });
+            }
+        }
     });
-
-    const partage = !!projetPartage;
-    if (partage === etaitPartage) return;
-    etaitPartage = partage;
-
-    if (partage) {
-        const autresNoms = cache[projetPartage.id].top5
-            .filter(([user, ts]) => user !== pseudo && (Date.now() - ts) < CINQ_MIN)
-            .map(([user]) => user)
-            .join(', ');
-        sendMsg({
-            type: 'NOTIFY',
-            body: `${autresNoms} joue aussi à ${projetPartage.name} !`
-        });
-    }
+    const nouvelIcon = surScratch ? 'active_scratch' : 'normal';
+    if (nouvelIcon !== etaitEtat) { etaitEtat = nouvelIcon; setIcon(nouvelIcon); }
 }
 
 // =====================
@@ -239,7 +251,12 @@ async function afficherProjets() {
     const projects  = await loadProjects();
     const container = document.getElementById('projects_container');
 
-    await Promise.all(projects.map(p => fetchCloudLogs(p.id)));
+    await Promise.all(projects.map(p => fetchScratchLogs(p.id)));
+
+    const twActive = {};
+    await Promise.all(projects.map(async p => {
+        twActive[p.id] = await sendMsg({ type: 'GET_TW_ACTIVE', projectId: p.id }) ?? false;
+    }));
 
     const vues = await Promise.all(projects.map(async p => ({
         id: p.id, views: await fetchViews(p.id)
@@ -248,14 +265,14 @@ async function afficherProjets() {
     let filtered = [...projects];
 
     if (sortType === 'activity') {
-        filtered.sort((a, b) => (cache[b.id]?.count ?? 0) - (cache[a.id]?.count ?? 0));
+        filtered.sort((a, b) => {
+            const aC = (scratchCache[a.id]?.length ?? 0) + (twActive[a.id] ? 1 : 0);
+            const bC = (scratchCache[b.id]?.length ?? 0) + (twActive[b.id] ? 1 : 0);
+            return bC - aC;
+        });
     }
     if (sortType === 'Last visit') {
-        filtered.sort((a, b) => {
-            const aTs = cache[a.id]?.top5[0]?.[1] ?? 0;
-            const bTs = cache[b.id]?.top5[0]?.[1] ?? 0;
-            return bTs - aTs;
-        });
+        filtered.sort((a, b) => (scratchCache[b.id]?.[0]?.[1] ?? 0) - (scratchCache[a.id]?.[0]?.[1] ?? 0));
     }
     if (sortType === 'views') {
         filtered.sort((a, b) => {
@@ -265,48 +282,98 @@ async function afficherProjets() {
         });
     }
 
-    notifierSiNecessaire(filtered);
+    notifierSiNecessaire(filtered, twActive);
 
     if (filtered.length === 0) {
-        container.innerHTML = '<p style="padding:0.5rem;color:#888">Aucun projet — ajoutes-en un !</p>';
+        container.innerHTML = `
+            <div style="padding:30px;text-align:center;color:#bbb">
+                <div style="font-size:32px;margin-bottom:8px">🎮</div>
+                <div style="font-weight:600;margin-bottom:4px">No projects yet</div>
+                <div style="font-size:11px">Add a Scratch project above to start tracking</div>
+            </div>`;
         return;
     }
 
-    container.innerHTML = filtered.map(project => {
-        const data         = cache[project.id] ?? { top5: [], count: 0 };
-        const monLog       = data.top5.find(([user]) => user === pseudo);
-        const jeJoue       = monLog ? (Date.now() - monLog[1]) < CINQ_MIN : false;
-        const scratchViews = vues.find(v => v.id === project.id)?.views ?? '?';
-        const vraiActifs   = data.top5.filter(([, ts]) => (Date.now() - ts) < CINQ_MIN).length;
+    const now = Date.now();
 
-        const top5HTML = data.top5.length > 0
-            ? data.top5.map(([user, ts]) => {
-                const estActif = (Date.now() - ts) < CINQ_MIN;
-                return `<p class="last_seen ${estActif ? 'actif' : ''}" data-ts="${ts}" data-user="${user}">
-                    <a href="https://scratch.mit.edu/users/${user}" target="_blank">${user}</a> : ${tempsRelatif(ts)}
-                </p>`;
-              }).join('')
-            : '<p class="last_seen">Aucun joueur récent</p>';
+    container.innerHTML = filtered.map(project => {
+        const scratch       = scratchCache[project.id] ?? [];
+        const twIsActive    = twActive[project.id] ?? false;
+        const meScratch     = scratch.find(([u]) => u === pseudo);
+        const jeJoueScratch = meScratch ? (now - meScratch[1]) < CINQ_MIN : false;
+        const scratchActifs = scratch.filter(([, ts]) => (now - ts) < CINQ_MIN).length;
+        const totalActifs   = scratchActifs + (twIsActive ? 1 : 0);
+        const scratchViews  = vues.find(v => v.id === project.id)?.views ?? '?';
+        const lastTs        = scratch[0]?.[1] ?? null;
+
+        // Statut — priorité : both > scratch > tw > me-here > offline
+        const isLive    = totalActifs > 0;
+        let liveType    = '';
+        if      (scratchActifs > 0 && twIsActive) liveType = 'both';
+        else if (scratchActifs > 0)               liveType = 'scratch';
+        else if (twIsActive)                      liveType = 'tw';
+
+        let borderClass = '';
+        if      (liveType)     borderClass = `live-${liveType}`;
+        else if (jeJoueScratch) borderClass = 'me-here'; // violet, non prioritaire
+
+        const statusHTML = isLive
+            ? `<span class="status-dot live-${liveType}"></span><span class="status-text live-${liveType}">LIVE</span><span class="status-sub">Active now</span>`
+            : `<span class="status-dot offline"></span><span class="status-text offline">Offline</span>${lastTs ? `<span class="status-sub">Last seen ${tempsRelatif(lastTs)}</span>` : ''}`;
+
+        // Badges
+        const twBadge = twIsActive ? `<span class="badge-tw">TurboWarp</span>` : '';
+        const scBadge = scratchActifs > 0 && !twIsActive ? `<span class="badge-sc">Scratch</span>` : '';
+        const bothBadge = scratchActifs > 0 && twIsActive ? `<span class="badge-sc">Scratch</span><span class="badge-tw">TurboWarp</span>` : '';
+
+        // Joueurs
+        const playersHTML = scratch.filter(([, ts]) => (now - ts) < CINQ_MIN).map(([user, ts]) => `
+            <span class="player-item actif last_seen" data-ts="${ts}" data-user="${user}">
+                <a href="https://scratch.mit.edu/users/${user}" target="_blank">${user}</a> · ${tempsRelatif(ts)}
+            </span>
+        `).join('<span style="color:#ddd"> · </span>');
+
+        const mainUrl = `https://scratch.mit.edu/projects/${project.id}`;
+        const twUrl   = `https://turbowarp.org/${project.id}`;
 
         return `
-            <div class="project ${jeJoue ? 'active' : ''}" data-id="${project.id}">
-                <div class="thumbnail-wrapper">
+            <div class="project ${borderClass}" data-id="${project.id}">
+                <div class="project-thumb">
                     <button class="remove_btn" data-id="${project.id}">✕</button>
-                    <a href="https://scratch.mit.edu/projects/${project.id}" target="_blank">
-                        <img src="https://scratch.mit.edu/get_image/project/${project.id}_200x1000.png"
-                             alt="Thumbnail" class="thumbnail">
+                    <a href="${mainUrl}" target="_blank">
+                        <img src="https://scratch.mit.edu/get_image/project/${project.id}_200x1000.png" alt="${project.name}">
                     </a>
                 </div>
-                <br>
-                <a href="https://scratch.mit.edu/projects/${project.id}" target="_blank" class="project-name">${project.name}</a>
-                <br>
-                <span class="active_count">${vraiActifs} actifs / ${scratchViews} vues</span>
-                ${top5HTML}
+                <div class="project-info">
+                    <a href="${mainUrl}" target="_blank" class="project-name">${project.name}</a>
+                    <div class="project-status">${statusHTML}</div>
+                    <div class="project-meta">
+                        <span class="meta-item">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                            ${totalActifs} online
+                        </span>
+                        <span>·</span>
+                        <span class="meta-item">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                            ${scratchViews} views
+                        </span>
+                        ${twIsActive && scratchActifs > 0 ? bothBadge : twBadge + scBadge}
+                    </div>
+                    ${playersHTML ? `<div class="players-list">${playersHTML}</div>` : ''}
+                    ${totalActifs === 0 ? '<div class="players-list">No active player</div>' : ''}
+                </div>
+                <div class="project-actions">
+                    <div class="action-row">
+                        <a href="${mainUrl}" target="_blank" class="action-btn" title="Open on Scratch">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="7.68702" height="12.55086" viewBox="0,0,7.68702,12.55086"><g transform="translate(-235.19715,-172.92976)"><g data-paper-data="{&quot;isPaintingLayer&quot;:true}" fill="none" fill-rule="nonzero" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" style="mix-blend-mode: normal"><path d="M239.06074,181.08888c-0.17492,0.30038 -2.95273,-1.74964 -2.86139,-4.45937c0.00437,-1.40589 1.51894,-2.92269 3.23949,-1.99133c0.23188,-0.2079 0.71129,-0.81825 1.16333,-0.72784c0.80682,0.16138 0.29792,3.53017 0.30603,5.01645c-1.71974,-0.7941 -1.96167,-1.57625 -2.08354,-1.42994c-0.15566,0.18687 3.16348,1.38059 3.0606,3.56866c-0.10316,2.19385 -2.57559,2.55963 -4.01936,2.34274c-0.23327,0.49904 -0.41913,1.01959 -1.21837,1.07095c-1.25873,-0.05577 -1.48228,-4.37908 -0.74831,-4.92593c0.55016,-0.25161 3.24347,1.39488 3.16151,1.53561z" data-paper-data="{&quot;index&quot;:null}"/></g></g></svg>                        </a>
+                        <a href="${twUrl}" target="_blank" class="action-btn" title="Open on TurboWarp" style="color:#ff4d4d">
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="10.54631" height="11.76086" viewBox="0,0,10.54631,11.76086"><g transform="translate(-234.72684,-174.31544)"><g data-paper-data="{&quot;isPaintingLayer&quot;:true}" fill="none" fill-rule="nonzero" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" style="mix-blend-mode: normal"><path d="M235.65718,175.17914c-0.4461,0.50761 -0.08193,5.03216 1.28706,4.92234c1.29753,-0.10409 1.39113,-2.4458 1.54475,-3.20808c-0.03211,1.48334 0.12121,3.94671 0.12045,5.89308c-0.57483,0.03843 -1.40241,0.57808 -1.37591,1.41698c0.02683,0.84916 0.71274,1.18612 2.83371,1.1132c2.55605,-0.08788 2.9039,-0.33578 2.92065,-1.29161c0.01676,-0.95584 -1.03677,-1.32216 -1.62904,-1.29866c0.04934,-0.98957 0.04529,-4.05616 0.10357,-6.00635c0.14413,1.14264 0.85122,2.46408 1.99797,2.45372c1.11628,-0.01008 1.33479,-3.68312 0.742,-4.1083c-0.71857,-0.51539 -8.08043,-0.41519 -8.54523,0.11369z"/></g></g></svg>                        </a>
+                    </div>
+                </div>
             </div>
         `;
     }).join('');
 
-    // Event listeners sur les croix
     container.querySelectorAll('.remove_btn').forEach(btn => {
         btn.addEventListener('click', e => {
             e.preventDefault();
@@ -324,12 +391,14 @@ let etatPrecedent = null;
 
 async function autoUpdate() {
     const projects = await loadProjects();
-    await Promise.all(projects.map(p => fetchCloudLogs(p.id)));
-    const nouvelEtat = projects.map(p => {
-        const d = cache[p.id];
-        return `${p.id}:${d?.count ?? 0}:${d?.top5.map(t => t[0]).join(',') ?? ''}`;
-    }).join('|');
-
+    await Promise.all(projects.map(p => fetchScratchLogs(p.id)));
+    const twActive = {};
+    await Promise.all(projects.map(async p => {
+        twActive[p.id] = await sendMsg({ type: 'GET_TW_ACTIVE', projectId: p.id }) ?? false;
+    }));
+    const nouvelEtat = projects.map(p =>
+        `${p.id}:${scratchCache[p.id]?.length ?? 0}:${twActive[p.id] ? 1 : 0}`
+    ).join('|');
     if (nouvelEtat !== etatPrecedent) {
         etatPrecedent = nouvelEtat;
         afficherProjets();
