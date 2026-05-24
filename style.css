@@ -2,7 +2,7 @@
 
 html, body {
     width: 420px;
-    min-height: 300px;
+    min-height: 200px;
     background: #f7f7fb;
     font-family: 'Outfit', sans-serif;
     font-size: 13px;
@@ -25,7 +25,9 @@ button { cursor: pointer; border: none; font-family: 'Outfit', sans-serif; }
     border-bottom: 1px solid #f0f0f0;
 }
 
-#logo { width: 160px; }
+#logo { width: 160px; 
+    font-family: Arial, Helvetica, sans-serif;
+}
 
 #header-actions { display: flex; gap: 6px; }
 
@@ -190,7 +192,7 @@ button { cursor: pointer; border: none; font-family: 'Outfit', sans-serif; }
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 12px 14px;
+    padding: 10px 12px;
     background: white;
     border-bottom: 1px solid #f0f0f0;
     position: relative;
@@ -328,30 +330,25 @@ button { cursor: pointer; border: none; font-family: 'Outfit', sans-serif; }
 
 /* Actions à droite */
 .project-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    gap: 15px;
     flex-shrink: 0;
 }
 
-.action-row {
-    display: flex;
-    gap: 4px;
-}
 
 .action-btn {
     width: 28px;
     height: 28px;
     border-radius: 8px;
-    background: #f4f4f8;
+    background: #00000000;
     color: #ffab19;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: background 200ms, color 200ms;
     text-decoration: none;
+    margin: 7px;
 }
-.action-btn:hover { background: #f8f8f8;}
+.action-btn:hover { background: #f0f0f0;}
 
 /* Players sous le projet */
 .players-list {

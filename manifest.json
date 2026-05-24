@@ -1,9 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ScratchPing",
-  "version": "1.0",
+  "version": "1.1",
   "description": "See activity of scratch projects",
-  "license": "CC-BY-NC 4.0",
   "permissions": [
     "cookies",
     "notifications",
@@ -24,6 +23,16 @@
       "128": "icons/icon128.png"
     }
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://scratch.mit.edu/projects/*",
+        "https://turbowarp.org/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -31,5 +40,11 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon16_normal.png"],
+      "matches": ["https://scratch.mit.edu/*", "https://turbowarp.org/*"]
+    }
+  ]
 }

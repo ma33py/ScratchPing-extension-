@@ -7,7 +7,7 @@ chrome.runtime.onConnect.addListener(port => {
 });
 
 // =====================
-// ALARMS KEEPALIVE (réveille le SW toutes les 20s)
+// ALARMS KEEPALIVE
 // =====================
 
 chrome.alarms.create('twKeepAlive', { periodInMinutes: 0.3 });
@@ -58,12 +58,36 @@ async function fetchScratchLogs(projectId, sessionId) {
 }
 
 // =====================
+// CHECK CLOUD VARS
+// =====================
+
+async function checkCloudVars(projectId) {
+    try {
+        const sessionId = await getScratchSession();
+        const res = await fetch(
+            `https://clouddata.scratch.mit.edu/logs?projectid=${projectId}&limit=1`,
+            {
+                headers: {
+                    'Cookie': `scratchsessionsid=${sessionId}; scratchcsrftoken=a`,
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'User-Agent': 'Mozilla/5.0'
+                }
+            }
+        );
+        if (!res.ok) return false;
+        const data = await res.json();
+        return Array.isArray(data); // true si le projet a des cloud vars
+    } catch {
+        return false;
+    }
+}
+
+// =====================
 // TURBOWARP (WebSocket)
 // =====================
 
-const twConnections = {}; // WS en mémoire
+const twConnections = {};
 
-// Persiste lastActivity dans chrome.storage
 async function saveTWActivity(projectId) {
     await chrome.storage.local.set({ [`tw_${projectId}`]: Date.now() });
 }
@@ -166,6 +190,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         fetchScratchLogs(msg.projectId, msg.sessionId).then(sendResponse);
         return true;
     }
+    if (msg.type === 'CHECK_CLOUD_VARS') {
+        checkCloudVars(msg.projectId).then(sendResponse);
+        return true;
+    }
     if (msg.type === 'ENSURE_TW_CONNECTIONS') {
         ensureTWConnections(msg.projectIds);
         sendResponse(true);
@@ -181,10 +209,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg.type === 'NOTIFY') {
         chrome.notifications.create({
-            type: 'basic',
-            iconUrl: 'icons/icon48.png',
-            title: 'ScratchPing !',
-            message: msg.body
+            type:     'basic',
+            iconUrl:  'icons/icon48.png',
+            title:    'ScratchPing !',
+            message:  msg.body
         });
         sendResponse(true);
         return true;
