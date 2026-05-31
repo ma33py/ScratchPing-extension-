@@ -11,6 +11,7 @@ chrome.runtime.onConnect.addListener(port => {
 // =====================
 
 chrome.alarms.create('twKeepAlive', { periodInMinutes: 0.3 });
+chrome.alarms.create('checkNotifs', { periodInMinutes: 0.5 }); // toutes les 30s
 
 chrome.alarms.onAlarm.addListener(alarm => {
     if (alarm.name === 'twKeepAlive') {
@@ -19,7 +20,83 @@ chrome.alarms.onAlarm.addListener(alarm => {
             ids.forEach(id => connectTW(id));
         });
     }
+    if (alarm.name === 'checkNotifs') {
+        checkAndNotify();
+    }
 });
+
+// =====================
+// NOTIFICATION LOGIC
+// =====================
+
+// { projectId: { players: Set<string>, lastNotifTime: number } }
+const notifState = {};
+
+async function checkAndNotify() {
+    const data = await new Promise(resolve => {
+        chrome.storage.local.get(['projects', 'notifiedProjects', 'notifState'], resolve);
+    });
+
+    const projects         = data.projects ?? [];
+    const notifiedProjects = data.notifiedProjects ?? [];
+    if (notifiedProjects.length === 0) return;
+
+    const sessionId = await getScratchSession();
+    if (!sessionId) return;
+
+    // notifState persisté dans storage : { [projectId]: { players: string[], lastNotifTime: number } }
+    const persistedState = data.notifState ?? {};
+
+    const FIVE_MIN = 5 * 60 * 1000;
+    const COOLDOWN = 30 * 1000;
+    const now = Date.now();
+
+    for (const project of projects) {
+        if (!notifiedProjects.some(pid => String(pid) === String(project.id))) continue;
+
+        const logs = await fetchScratchLogs(project.id, sessionId);
+        const activePlayers = new Set(
+            (logs ?? [])
+                .filter(log => {
+                    const tsMs = log.timestamp < 1e10 ? log.timestamp * 1000 : log.timestamp;
+                    return (now - tsMs) < FIVE_MIN;
+                })
+                .map(log => log.user)
+                .filter(Boolean)
+        );
+
+        const prev = persistedState[project.id] ?? { players: [], lastNotifTime: 0 };
+        const prevPlayers = new Set(prev.players);
+
+        // Nouveaux joueurs = présents maintenant, absents au check précédent
+        const newPlayers = [...activePlayers].filter(p => !prevPlayers.has(p));
+
+        const wasEmpty   = prevPlayers.size === 0;
+        const cooldownOk = (now - prev.lastNotifTime) > COOLDOWN;
+
+        if (newPlayers.length > 0 && wasEmpty && cooldownOk) {
+            const playerName = newPlayers[0];
+            persistedState[project.id] = {
+                players: [...activePlayers],
+                lastNotifTime: now
+            };
+            chrome.notifications.create(`notif_${project.id}_${now}`, {
+                type:    'basic',
+                iconUrl: 'icons/icon48.png',
+                title:   'ScratchPing',
+                message: `"${playerName}" joue au projet "${project.name}" !`
+            });
+        } else {
+            persistedState[project.id] = {
+                players: [...activePlayers],
+                lastNotifTime: prev.lastNotifTime
+            };
+        }
+    }
+
+    // Sauvegarde l'état pour le prochain cycle
+    await chrome.storage.local.set({ notifState: persistedState });
+}
 
 // =====================
 // AUTH SCRATCH
@@ -76,7 +153,7 @@ async function checkCloudVars(projectId) {
         );
         if (!res.ok) return false;
         const data = await res.json();
-        return Array.isArray(data); // true si le projet a des cloud vars
+        return Array.isArray(data);
     } catch {
         return false;
     }
@@ -209,10 +286,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     if (msg.type === 'NOTIFY') {
         chrome.notifications.create({
-            type:     'basic',
-            iconUrl:  'icons/icon48.png',
-            title:    'ScratchPing !',
-            message:  msg.body
+            type:    'basic',
+            iconUrl: 'icons/icon48.png',
+            title:   'ScratchPing !',
+            message: msg.body
         });
         sendResponse(true);
         return true;

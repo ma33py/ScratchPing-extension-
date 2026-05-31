@@ -5,37 +5,25 @@ function getProjectId() {
     return match ? match[1] : null;
 }
 
-// Demande les logs Cloud au background script
-async function fetchProjectLogs(projectId) {
-    return new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: 'GET_SESSION' }, (sessionId) => {
-            if (!sessionId) { resolve([]); return; }
-            chrome.runtime.sendMessage({ type: 'GET_SCRATCH_LOGS', projectId, sessionId }, (logs) => {
-                resolve(logs ?? []);
-            });
-        });
-    });
-}
-
-// Calcule la liste des joueurs actifs (connectés depuis moins de 5 minutes)
-function getActivePlayers(logs) {
-    const CINQ_MIN = 5 * 60 * 1000;
-    const maintenant = Date.now();
-    const joueurs = new Map();
-
-    logs.forEach(log => {
-        const timestamp = new Date(log.timestamp).getTime();
-        if (maintenant - timestamp < CINQ_MIN) {
-            if (!joueurs.has(log.user) || timestamp > joueurs.get(log.user)) {
-                joueurs.set(log.user, timestamp);
-            }
+// Vérifie si le projet a des variables cloud
+async function hasCloudVars(projectId) {
+    try {
+        const res  = await fetch(`https://api.scratch.mit.edu/projects/${projectId}`);
+        const data = await res.json();
+        // Cherche dans les assets ou via clouddata
+        const logsRes = await fetch(`https://clouddata.scratch.mit.edu/logs?projectid=${projectId}&limit=1`);
+        // Si la réponse est OK et contient du JSON, le projet a des cloud vars
+        if (logsRes.ok) {
+            const logs = await logsRes.json();
+            return Array.isArray(logs); // true si le projet supporte les cloud vars
         }
-    });
-
-    return Array.from(joueurs.keys());
+        return false;
+    } catch {
+        return false;
+    }
 }
 
-// Vérifie si le projet est enregistré localement
+// Vérifie si le projet est déjà dans ScratchPing
 async function isAlreadyAdded(projectId) {
     return new Promise(resolve => {
         chrome.storage.local.get('projects', data => {
@@ -45,137 +33,163 @@ async function isAlreadyAdded(projectId) {
     });
 }
 
+// Ajoute le projet à ScratchPing
 async function addProject(projectId) {
     return new Promise(resolve => {
         chrome.storage.local.get('projects', async data => {
             const projects = data.projects ?? [];
-            if (projects.some(p => String(p.id) === String(projectId))) { resolve(false); return; }
+            if (projects.some(p => String(p.id) === String(projectId))) {
+                resolve(false);
+                return;
+            }
+
             try {
                 const res  = await fetch(`https://api.scratch.mit.edu/projects/${projectId}`);
                 const info = await res.json();
                 const name = info.title
-                    .replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').replace(/#\S+/g, '')
-                    .replace(/\s*v?\d+(\.\d+)+\s*/gi, '').replace(/\s+(alpha|beta|bêta)\s*$/i, '')
-                    .replace(/\s+/g, ' ').trim();
+                    .replace(/\(.*?\)/g, '')
+                    .replace(/\[.*?\]/g, '')
+                    .replace(/#\S+/g, '')
+                    .replace(/\s*v?\d+(\.\d+)+\s*/gi, '')
+                    .replace(/\s+(alpha|beta|bêta)\s*$/i, '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
                 projects.push({ id: parseInt(projectId), name });
                 chrome.storage.local.set({ projects }, () => resolve(true));
-            } catch { resolve(false); }
+            } catch {
+                resolve(false);
+            }
         });
     });
 }
 
-async function removeProject(projectId) {
-    return new Promise(resolve => {
-        chrome.storage.local.get('projects', data => {
-            let projects = data.projects ?? [];
-            projects = projects.filter(p => String(p.id) !== String(projectId));
-            chrome.storage.local.set({ projects }, () => resolve(true));
-        });
-    });
-}
+// Crée et injecte le bouton
+async function injectButton(projectId) {
+    // Évite les doublons
+    if (document.getElementById('scratchping-btn')) return;
 
-// Crée ou met à jour le bouton de contrôle
-async function updateButtonState(projectId) {
     const alreadyAdded = await isAlreadyAdded(projectId);
-    let btn = document.getElementById('scratchping-btn');
-    
-    if (!btn) {
-        const projectButtons = document.querySelector('.project-buttons');
-        if (!projectButtons) return;
 
-        btn = document.createElement('button');
-        btn.id = 'scratchping-btn';
-        btn.className = 'button';
-        btn.style.display = 'inline-flex';
-        btn.style.alignItems = 'center';
-        btn.style.gap = '6px';
-        btn.style.marginLeft = '10px';
-        btn.style.transition = 'background-color 150ms, color 150ms, border-color 150ms';
-        
-        projectButtons.appendChild(btn);
+    const btn = document.createElement('button');
+    btn.id = 'scratchping-btn';
+    btn.innerHTML = alreadyAdded
+        ? `<img src="${chrome.runtime.getURL('icons/icon16_normal.png')}" style="width:14px;vertical-align:middle;margin-right:5px"> Already in ScratchPing`
+        : `<img src="${chrome.runtime.getURL('icons/icon16_normal.png')}" style="width:14px;vertical-align:middle;margin-right:5px"> Add to ScratchPing`;
+
+    btn.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 99999;
+        background: ${alreadyAdded ? '#e8e0f8' : '#855cd6'};
+        color: ${alreadyAdded ? '#855cd6' : 'white'};
+        border: none;
+        border-radius: 12px;
+        padding: 10px 16px;
+        font-size: 13px;
+        font-weight: 600;
+        font-family: 'Outfit', sans-serif;
+        cursor: ${alreadyAdded ? 'default' : 'pointer'};
+        box-shadow: 0 4px 16px rgba(133,92,214,0.35);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        transition: background 200ms, transform 100ms;
+    `;
+
+    if (!alreadyAdded) {
+        btn.addEventListener('mouseenter', () => btn.style.background = '#7048c8');
+        btn.addEventListener('mouseleave', () => btn.style.background = '#855cd6');
+        btn.addEventListener('mousedown',  () => btn.style.transform  = 'scale(0.97)');
+        btn.addEventListener('mouseup',    () => btn.style.transform  = 'scale(1)');
 
         btn.addEventListener('click', async () => {
-            const currentStatus = await isAlreadyAdded(projectId);
-            btn.disabled = true;
-            btn.style.opacity = "0.5";
-            if (currentStatus) { await removeProject(projectId); } 
-            else { await addProject(projectId); }
-            btn.disabled = false;
-            btn.style.opacity = "1";
-            updateButtonState(projectId);
+            btn.innerHTML = '⏳ Adding...';
+            btn.style.background = '#aaa';
+            btn.style.cursor     = 'default';
+
+            const success = await addProject(projectId);
+
+            if (success) {
+                btn.innerHTML = `<img src="${chrome.runtime.getURL('icons/icon16_normal.png')}" style="width:14px;vertical-align:middle;margin-right:5px"> ✓ Added to ScratchPing!`;
+                btn.style.background = '#e8e0f8';
+                btn.style.color      = '#855cd6';
+            } else {
+                btn.innerHTML = '❌ Error';
+                btn.style.background = '#fde';
+                btn.style.color      = '#e74c3c';
+            }
         });
     }
 
-    const iconUrl = chrome.runtime.getURL('icons/icon16_normal.png');
-    const imgHtml = `<img src="${iconUrl}" style="width: 14px; height: 14px; display: inline-block; pointer-events: none; margin-right: 2px;">`;
-
-    if (alreadyAdded) {
-        btn.innerHTML = `${imgHtml}<span>Delete</span>`;
-        btn.style.color = '#ff4d4d';
-        btn.style.backgroundColor = '#ffffff';
-        btn.onmouseenter = () => { btn.style.backgroundColor = '#fff0f0'; btn.style.borderColor = '#ff4d4d'; };
-        btn.onmouseleave = () => { btn.style.backgroundColor = '#ffffff'; btn.style.borderColor = 'rgba(0, 0, 0, 0.1)'; };
+    // Cherche la div project-buttons (boutons Scratch : Remix, See inside...)
+    const projectButtons = document.querySelector('.project-buttons');
+    if (projectButtons) {
+        // Retire le style fixed pour s'intégrer dans la page
+        btn.style.cssText = `
+            background: ${alreadyAdded ? '#e8e0f8' : '#855cd6'};
+            color: ${alreadyAdded ? '#855cd6' : 'white'};
+            border: none;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: sans-serif;
+            cursor: ${alreadyAdded ? 'default' : 'pointer'};
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: 8px;
+            transition: background 200ms;
+        `;
+        projectButtons.appendChild(btn);
     } else {
-        btn.innerHTML = `${imgHtml}<span>Add</span>`;
-        btn.style.color = '#575e75';
-        btn.style.backgroundColor = '#ffffff';
-        btn.onmouseenter = () => { btn.style.backgroundColor = '#f2f2f2'; };
-        btn.onmouseleave = () => { btn.style.backgroundColor = '#ffffff'; };
+        // Fallback : fixed en bas à droite
+        document.body.appendChild(btn);
     }
 }
 
-// Crée ou met à jour le composant de la liste des joueurs connectés
-async function updatePlayersList(projectId) {
-    const extensionList = document.querySelector('.extension-list');
-    if (!extensionList) return;
+// Attend qu'un élément apparaisse dans le DOM
+function waitForElement(selector, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+        const el = document.querySelector(selector);
+        if (el) { resolve(el); return; }
 
-    let playersChip = document.getElementById('scratchping-players-chip');
-    
-    // Si la puce n'existe pas encore dans la liste des extensions, on la génère au même style
-    if (!playersChip) {
-        playersChip = document.createElement('div');
-        playersChip.id = 'scratchping-players-chip';
-        playersChip.className = 'extension-chip';
-        playersChip.style.borderColor = '#855cd6'; // Ajoute une nuance violette ScratchPing discrète
-        extensionList.appendChild(playersChip);
-    }
-
-    const logs = await fetchProjectLogs(projectId);
-    const activePlayers = getActivePlayers(logs);
-
-    const defaultIconUrl = chrome.runtime.getURL('icons/icon16_normal.png');
-
-    if (activePlayers.length === 0) {
-        playersChip.innerHTML = `
-            <img class="extension-icon" src="${defaultIconUrl}" style="filter: grayscale(1);">
-            <div class="extension-content">
-                <span style="font-weight: bold; color: #575e75;">Live Players</span>
-                <div style="font-size: 11px; color: #999;">0 players connected</div>
-            </div>
-        `;
-    } else {
-        // Crée une liste HTML cliquable menant vers les profils des joueurs connectés
-        const playersLinks = activePlayers.map(user => {
-            return `<a href="/users/${user}/" target="_blank" style="color: #855cd6; font-weight: 600; text-decoration: none; hover: text-decoration: underline;">@${user}</a>`;
-        }).join(', ');
-
-        playersChip.innerHTML = `
-            <img class="extension-icon" src="${defaultIconUrl}">
-            <div class="extension-content" style="width: 100%;">
-                <span style="font-weight: bold; color: #855cd6;">🟢 Live Players (${activePlayers.length})</span>
-                <div style="font-size: 12px; color: #575e75; margin-top: 4px; line-height: 1.4; word-break: break-word;">
-                    ${playersLinks}
-                </div>
-            </div>
-        `;
-    }
+        const observer = new MutationObserver(() => {
+            const el = document.querySelector(selector);
+            if (el) { observer.disconnect(); resolve(el); }
+        });
+        observer.observe(document.body, { subtree: true, childList: true });
+        setTimeout(() => { observer.disconnect(); reject(); }, timeout);
+    });
 }
 
-// Boucle principale d'analyse
-setInterval(() => {
+// Point d'entrée
+async function main() {
     const projectId = getProjectId();
-    if (projectId) {
-        updateButtonState(projectId);
-        updatePlayersList(projectId);
+    if (!projectId) return;
+
+    try {
+        await waitForElement('.project-buttons');
+    } catch {
+        return; // div pas trouvée dans les 10s
     }
-}, 1500);
+
+    const hasCloud = await hasCloudVars(projectId);
+    if (hasCloud) {
+        injectButton(projectId);
+    }
+}
+
+main();
+
+// Écoute les changements d'URL (SPA navigation sur Scratch)
+let lastUrl = location.href;
+new MutationObserver(() => {
+    if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        document.getElementById('scratchping-btn')?.remove();
+        main();
+    }
+}).observe(document.body, { subtree: true, childList: true });
