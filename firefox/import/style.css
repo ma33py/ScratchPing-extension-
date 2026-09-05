@@ -1,0 +1,27 @@
+button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background-color: #f4f4f8;
+    color: #666;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 4px 9px;
+    border-radius: 7px;
+    transition: background-color 200ms, color 200ms;
+    cursor: pointer;
+    border: none;
+    font-family: 'Outfit', sans-serif;
+    margin: 30px auto;
+}
+
+button:hover {
+    background-color: #ebe8f8;
+    color: #855cd6;
+}
+
+#header {
+    display: flex;
+    justify-content: center;
+    margin: 30px;
+}

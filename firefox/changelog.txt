@@ -1,0 +1,6 @@
+- Fonctions "prompt" et "alert" reprogrammées à la main (firefox avait tendance à bloquer le code sans rien afficher)
+- Vérification qu'un projet utilise le cloud avant d'afficher la liste "Active players"
+- Liste "Active players" déplacée et modifée pour un menu déroulant
+- Correction du bug qui empêchait le chargement automatique des projets à l'ouverture de la popup
+- Correction de l'affichage de l'icone "active"
+- Ajout d'une popup séparée pour l'importation (l'originale disparait en perdant le focus)
