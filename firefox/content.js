@@ -92,6 +92,8 @@ async function updateList() {
     if (!projectId) return;
     if (!isScratch) return;
 
+    if (document.querySelector(".banner-outer")) return;
+
     cloudProject = false;
     document.querySelectorAll(".extension-content").forEach(ext => {
         ext.childNodes.forEach(child => {
